@@ -24,8 +24,20 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
+      - name: 번역 기록 불러오기
+        uses: actions/cache/restore@v4
+        with:
+          path: .cache
+          key: translations-${{ github.run_id }}
+          restore-keys: translations-
       - name: 뉴스 받기
         run: python scripts/fetch_news.py
+      - name: 번역 기록 저장
+        if: always()
+        uses: actions/cache/save@v4
+        with:
+          path: .cache
+          key: translations-${{ github.run_id }}-${{ github.run_attempt }}
       - name: 저장소 활동 유지 (예약 실행이 60일 뒤 꺼지지 않도록)
         run: |
           last=$(git log -1 --format=%ct)

@@ -54,6 +54,7 @@ FEEDS = [
     ("stock", None, search("주가 OR 외국인 순매수 OR 공모주 when:1d"), 36),
     ("startup", "국내", search("스타트업 투자 유치 OR 투자유치 OR 시리즈A OR 시리즈B OR 프리A when:2d"), 54),
     ("startup", "국내", search("스타트업 OR 벤처캐피털 OR 유니콘 기업 OR 엑시트 when:1d"), 36),
+    ("startup", "해외", search("해외 스타트업 투자 유치 OR 실리콘밸리 스타트업 OR 美 스타트업 OR 中 스타트업 when:2d"), 54),
     ("startup", "해외", search("startup raises funding when:1d", US), 36),
     ("startup", "해외", search("\"Series A\" OR \"Series B\" OR \"Series C\" funding round when:1d", US), 36),
     ("startup", "해외", search("venture capital OR unicorn startup valuation when:1d", US), 36),
@@ -90,39 +91,95 @@ def fetch(url, tries=3):
             time.sleep(2 * (i + 1))
 
 
+CACHE = Path(__file__).resolve().parent.parent / ".cache" / "translations.json"
+
+
+def _gtx_batch(b):
+    q = "\n".join(b)
+    url = ("https://translate.googleapis.com/translate_a/single?client=gtx&sl=en&tl=ko&dt=t&q="
+           + urllib.parse.quote(q))
+    body = fetch(url, tries=1)
+    if not body:
+        return {}
+    res = json.loads(body)
+    text = "".join(seg[0] for seg in res[0] if seg and seg[0])
+    lines = [l.strip() for l in text.split("\n")]
+    return {s: d for s, d in zip(b, lines) if d} if len(lines) == len(b) else {}
+
+
+def _clients5(t):
+    url = ("https://clients5.google.com/translate_a/t?client=dict-chrome-ex&sl=en&tl=ko&q="
+           + urllib.parse.quote(t))
+    body = fetch(url, tries=1)
+    if not body:
+        return None
+    res = json.loads(body)
+    while isinstance(res, list) and res:
+        res = res[0]
+    return res if isinstance(res, str) and res.strip() else None
+
+
+def _mymemory(t):
+    url = "https://api.mymemory.translated.net/get?langpair=en|ko&q=" + urllib.parse.quote(t[:450])
+    body = fetch(url, tries=1)
+    if not body:
+        return None
+    res = json.loads(body)
+    txt = (res.get("responseData") or {}).get("translatedText") or ""
+    if res.get("responseStatus") != 200 or not txt or "MYMEMORY WARNING" in txt or not re.search(r"[가-힣]", txt):
+        return None
+    return html.unescape(txt).strip()
+
+
 def translate_en_ko(titles):
-    """영문 제목을 한국어로 번역합니다 (구글 번역 공개 엔드포인트, 실패하면 원문 유지)."""
-    out = {}
-    batch, size = [], 0
-    batches = []
-    for t in titles:
+    """영문 제목을 한국어로 번역합니다.
+
+    무료 번역 서버들이 GitHub 쪽 요청을 자주 막기 때문에, 여러 곳을 차례로 시도하고
+    한 번 번역한 제목은 .cache/translations.json 에 저장해 다음 실행 때 다시 씁니다.
+    """
+    try:
+        cache = json.loads(CACHE.read_text(encoding="utf-8"))
+    except Exception:  # noqa: BLE001
+        cache = {}
+    todo = [t for t in titles if t not in cache]
+
+    # 1) 구글 번역(묶음)
+    batches, batch, size = [], [], 0
+    for t in todo:
         if batch and size + len(t) > 1500:
             batches.append(batch); batch, size = [], 0
         batch.append(t); size += len(t) + 1
     if batch:
         batches.append(batch)
     for b in batches:
-        q = "\n".join(b)
-        url = ("https://translate.googleapis.com/translate_a/single?client=gtx&sl=en&tl=ko&dt=t&q="
-               + urllib.parse.quote(q))
-        body = None
-        for wait in (0, 6, 15):
-            time.sleep(wait)
-            body = fetch(url, tries=1)
-            if body:
-                break
-        if not body:
-            continue
         try:
-            res = json.loads(body)
-            text = "".join(seg[0] for seg in res[0] if seg and seg[0])
-            lines = [l.strip() for l in text.split("\n")]
-            if len(lines) == len(b):
-                out.update({src: dst for src, dst in zip(b, lines) if dst})
-        except Exception as e:  # noqa: BLE001
-            print(f"번역 실패: {e}", file=sys.stderr)
+            got = _gtx_batch(b)
+        except Exception:  # noqa: BLE001
+            got = {}
+        if not got:
+            break  # 막혔으면 다음 방법으로
+        cache.update(got)
         time.sleep(1.5)
-    return out
+
+    # 2) 다른 구글 엔드포인트, 3) MyMemory — 하나씩, 막히면 바로 다음 방법으로
+    for fn in (_clients5, _mymemory):
+        for t in [t for t in todo if t not in cache]:
+            try:
+                d = fn(t)
+            except Exception:  # noqa: BLE001
+                d = None
+            if not d:
+                break
+            cache[t] = d
+            time.sleep(0.8)
+
+    try:
+        CACHE.parent.mkdir(parents=True, exist_ok=True)
+        keep = dict(list(cache.items())[-3000:])
+        CACHE.write_text(json.dumps(keep, ensure_ascii=False), encoding="utf-8")
+    except Exception as e:  # noqa: BLE001
+        print(f"번역 저장 실패: {e}", file=sys.stderr)
+    return {t: cache[t] for t in titles if t in cache}
 
 
 def norm(title):
@@ -204,7 +261,8 @@ def main():
                 cur["cat"], cur["tag"] = item["cat"], item["tag"]
 
     # 해외 스타트업 기사는 최신 50건만 번역해서 싣고, 번역이 안 된 기사는 뺍니다.
-    foreign = sorted((k for k, it in merged.items() if it["cat"] == "startup" and it["tag"] == "해외"),
+    foreign = sorted((k for k, it in merged.items() if it["cat"] == "startup" and it["tag"] == "해외"
+                      and not re.search(r"[가-힣]", it["title"])),
                      key=lambda k: -merged[k]["ts"])
     keep, drop = foreign[:50], foreign[50:]
     tr = translate_en_ko([merged[k]["title"] for k in keep]) if keep else {}
