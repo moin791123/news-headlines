@@ -311,6 +311,9 @@ section.box { background: var(--surface); border: 1px solid var(--line); border-
   function render() {
     const grid = document.getElementById("grid");
     if (!data) return;
+    // 다시 그려도 보던 위치가 유지되도록 높이와 스크롤 위치를 잡아 둡니다.
+    const keepY = window.scrollY;
+    grid.style.minHeight = grid.offsetHeight + "px";
     grid.replaceChildren();
     visibleSince.clear();
     const obs = makeObserver();
@@ -323,10 +326,8 @@ section.box { background: var(--surface); border: 1px solid var(--line); border-
 
     for (const c of ordered) {
       const list = data.items
-        .filter((it) => it.cat === c.id && !prefs.hidden[it.id] && !seenSnap.has(it.id) && kwPenalty(it) < 4)
-        .map((it) => ({ it, s: score(it) }))
-        .sort((a, b) => b.s - a.s)
-        .map((x) => x.it);
+        .filter((it) => it.cat === c.id && !prefs.hidden[it.id] && !seenSnap.has(it.id) && kwPenalty(it) < 1.5)
+        .sort((a, b) => b.ts - a.ts || b.hot - a.hot);
       const base = BASE_COUNT[c.id] || 8;
       const count = expanded.has(c.id) ? list.length : Math.max(2, Math.round(base * Math.min(1.2, catW(c.id))));
       const shown = list.slice(0, count);
@@ -352,6 +353,8 @@ section.box { background: var(--surface); border: 1px solid var(--line); border-
       }
       grid.append(sec);
     }
+    grid.style.minHeight = "";
+    window.scrollTo(0, keepY);
   }
 
   let _hot = null;
