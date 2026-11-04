@@ -176,11 +176,12 @@ section.box { background: var(--surface); border: 1px solid var(--line); border-
   const DATA_URL = "news.json";
   const PREF_KEY = "hanjul.prefs.v1";
   // 분야별 기본 표시 개수 (관심이 줄면 이 숫자도 줄어듭니다)
-  const BASE_COUNT = { kr_econ: 10, realestate: 10, stock: 10, world_econ: 10, world: 7, ent: 6, society: 7, football: 8 };
+  const BASE_COUNT = { kr_econ: 10, realestate: 10, stock: 10, world_econ: 10, world: 7, startup: 10, ent: 6, society: 7, football: 8 };
   const FILTERS = [
     { id: "all", name: "전체" },
     { id: "국내", name: "국내 경제" },
     { id: "해외", name: "해외" },
+    { id: "스타트업", name: "스타트업" },
     { id: "이슈", name: "연예·사회" },
     { id: "축구", name: "유럽 축구" },
   ];
@@ -336,7 +337,7 @@ section.box { background: var(--surface); border: 1px solid var(--line); border-
       const sec = el("section", "box");
       sec.dataset.cat = c.id;
       const h = el("h2", null, c.name);
-      h.append(el("small", null, c.group === "축구" ? "영국·스페인·독일·프랑스" : c.group));
+      h.append(el("small", null, c.group === "축구" ? "영국·스페인·독일·프랑스" : c.group === "스타트업" ? "국내·해외(번역)" : c.group));
       sec.append(h);
       if (!shown.length) {
         sec.append(el("p", "empty", "이 분야 새 기사는 다 보셨어요. 새 뉴스는 30분마다 들어옵니다."));
@@ -372,7 +373,7 @@ section.box { background: var(--surface); border: 1px solid var(--line); border-
     if (it.hot >= hotCut) dot.title = "많이 보도되는 기사";
     const a = el("a", "title");
     a.href = it.url; a.target = "_blank"; a.rel = "noopener noreferrer";
-    a.title = it.title + (it.source ? " · " + it.source : "");
+    a.title = it.title + (it.orig ? "\n원문: " + it.orig : "") + (it.source ? " · " + it.source : "");
     if (it.tag) a.append(el("span", "tag", it.tag));
     a.append(document.createTextNode(it.title));
     a.addEventListener("click", () => like(it));
@@ -406,7 +407,7 @@ section.box { background: var(--surface); border: 1px solid var(--line); border-
     savePrefs();
     undo = before;
     li.classList.add("gone");
-    setTimeout(render, 230);
+    setTimeout(() => li.remove(), 230);
     showToast("이런 뉴스는 점점 덜 보여드릴게요", "되돌리기", () => {
       try { prefs = Object.assign({ cat: {}, kw: {}, hidden: {}, dislikes: 0 }, JSON.parse(undo)); } catch (e) {}
       savePrefs(); render();
