@@ -105,7 +105,12 @@ def translate_en_ko(titles):
         q = "\n".join(b)
         url = ("https://translate.googleapis.com/translate_a/single?client=gtx&sl=en&tl=ko&dt=t&q="
                + urllib.parse.quote(q))
-        body = fetch(url)
+        body = None
+        for wait in (0, 6, 15):
+            time.sleep(wait)
+            body = fetch(url, tries=1)
+            if body:
+                break
         if not body:
             continue
         try:
@@ -116,7 +121,7 @@ def translate_en_ko(titles):
                 out.update({src: dst for src, dst in zip(b, lines) if dst})
         except Exception as e:  # noqa: BLE001
             print(f"번역 실패: {e}", file=sys.stderr)
-        time.sleep(0.5)
+        time.sleep(1.5)
     return out
 
 
@@ -198,13 +203,21 @@ def main():
             if PRIORITY.index(item["cat"]) < PRIORITY.index(cur["cat"]):
                 cur["cat"], cur["tag"] = item["cat"], item["tag"]
 
-    en = [it["title"] for it in merged.values() if it["cat"] == "startup" and it["tag"] == "해외"]
-    tr = translate_en_ko(en) if en else {}
-    print(f"해외 스타트업 기사 번역 {len(tr)}/{len(en)}건")
-    for it in merged.values():
+    # 해외 스타트업 기사는 최신 50건만 번역해서 싣고, 번역이 안 된 기사는 뺍니다.
+    foreign = sorted((k for k, it in merged.items() if it["cat"] == "startup" and it["tag"] == "해외"),
+                     key=lambda k: -merged[k]["ts"])
+    keep, drop = foreign[:50], foreign[50:]
+    tr = translate_en_ko([merged[k]["title"] for k in keep]) if keep else {}
+    print(f"해외 스타트업 기사 번역 {len(tr)}/{len(keep)}건")
+    for k in keep:
+        it = merged[k]
         if it["title"] in tr:
             it["orig"] = it["title"]
             it["title"] = tr[it["title"]]
+        else:
+            drop.append(k)
+    for k in drop:
+        merged.pop(k, None)
 
     items = []
     for it in merged.values():
