@@ -108,6 +108,7 @@ section.box { background: var(--surface); border: 1px solid var(--line); border-
 .title:hover { color: var(--link); }
 .title:visited { color: var(--muted); }
 .tag { font-size: 11.5px; font-weight: 600; color: var(--link); margin-right: 6px; }
+.tag.pop { color: var(--hot); }
 .meta { color: var(--muted); font-size: 12px; white-space: nowrap; font-variant-numeric: tabular-nums; }
 .meta .src { margin-right: 6px; }
 @media (max-width: 520px) { .meta .src { display: none; } }
@@ -176,7 +177,7 @@ section.box { background: var(--surface); border: 1px solid var(--line); border-
   const DATA_URL = "news.json";
   const PREF_KEY = "hanjul.prefs.v1";
   // 분야별 기본 표시 개수 (관심이 줄면 이 숫자도 줄어듭니다)
-  const BASE_COUNT = { kr_econ: 10, realestate: 10, stock: 10, world_econ: 10, world: 7, startup: 10, ent: 6, society: 7, football: 8 };
+  const BASE_COUNT = { kr_econ: 5, realestate: 5, stock: 5, world_econ: 5, world: 4, startup: 5, ent: 4, society: 4, football: 4 };
   // 탭마다 보여줄 분야. 전체가 아닌 탭에서는 해당 분야 기사를 개수 제한 없이 쭉 보여줍니다.
   const FILTERS = [
     { id: "all", name: "전체" },
@@ -188,7 +189,7 @@ section.box { background: var(--surface); border: 1px solid var(--line); border-
     { id: "issue", name: "연예·사회", cats: ["ent", "society"] },
     { id: "football", name: "유럽 축구", cats: ["football"] },
   ];
-  const TAB_MAX = 40;
+  const TAB_MAX = 15;
   const STOP = new Set(("속보 단독 종합 오늘 내일 어제 기자 뉴스 이번 대한 관련 위해 이후 올해 지난 사진 영상 포토 " +
     "가운데 통해 대해 따라 있다 없다 했다 한다 하는 있는 위한 만에 이상 이하 최대 최고 최저 사상 첫 결국 " +
     "the and for with from that this").split(" "));
@@ -283,10 +284,11 @@ section.box { background: var(--surface); border: 1px solid var(--line); border-
     for (const t of it._tok) s += Math.min(2, prefs.kw[t] || 0);
     return s;
   }
+  // 인기 점수: 네이버 '많이 본 뉴스' 순위(조회수) > 여러 언론이 다룬 정도 > 최신성
   function score(it) {
     const ageH = (Date.now() / 1000 - it.ts) / 3600;
-    const fresh = 2.5 * Math.exp(-Math.max(0, ageH) / 10);
-    return (it.hot + fresh) * catW(it.cat) - 0.7 * kwPenalty(it);
+    const fresh = 1.5 * Math.exp(-Math.max(0, ageH) / 12);
+    return 4 * Math.log2(1 + (it.views || 0)) + it.hot + fresh - 0.7 * kwPenalty(it);
   }
 
   function ago(ts) {
@@ -343,7 +345,9 @@ section.box { background: var(--surface); border: 1px solid var(--line); border-
     for (const c of ordered) {
       const list = data.items
         .filter((it) => it.cat === c.id && !prefs.hidden[it.id] && !seenSnap.has(it.id) && kwPenalty(it) < 1.5)
-        .sort((a, b) => b.ts - a.ts || b.hot - a.hot)
+        .map((it) => ({ it, s: score(it) }))
+        .sort((a, b) => b.s - a.s)
+        .map((x) => x.it)
         .filter((it) => {
           const cl = clusters.find((k) => k.members.some((m) => similar(m, it._sim)));
           if (!cl) { clusters.push({ members: [it._sim], n: 1 }); return true; }
@@ -390,11 +394,12 @@ section.box { background: var(--surface); border: 1px solid var(--line); border-
   function row(it, hotCut) {
     const li = el("li");
     li.dataset.id = it.id;
-    const dot = el("span", "dot" + (it.hot >= hotCut ? " hot" : ""));
-    if (it.hot >= hotCut) dot.title = "많이 보도되는 기사";
+    const dot = el("span", "dot" + (it.views ? " hot" : ""));
+    if (it.views) dot.title = "많이 본 뉴스";
     const a = el("a", "title");
     a.href = it.url; a.target = "_blank"; a.rel = "noopener noreferrer";
     a.title = it.title + (it.orig ? "\n원문: " + it.orig : "") + (it.source ? " · " + it.source : "");
+    if (it.views) a.append(el("span", "tag pop", "많이 본"));
     if (it.tag) a.append(el("span", "tag", it.tag));
     a.append(document.createTextNode(it.title));
     a.addEventListener("click", () => like(it));

@@ -235,6 +235,118 @@ def parse(feed, xml_bytes):
     return out
 
 
+# ---------------- 조회수 랭킹 (네이버 '많이 본 뉴스') ----------------
+RANK_URL = "https://news.naver.com/main/ranking/popularDay.naver"
+BROWSER_UA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/130 Safari/537.36"
+PARTICLES = re.compile(r"(에서는|에서|으로는|으로|에게|까지|부터|보다|처럼|이라|라는|이란|에는|과의|와의|은|는|이|가|을|를|의|에|로|와|과|도|만)$")
+STOP = set("속보 단독 종합 오늘 내일 어제 기자 뉴스 이번 대한 관련 위해 이후 올해 지난 사진 영상 포토 가운데 통해 대해 따라 있다 없다 했다 한다 하는 있는 위한 만에 이상 이하 최대 최고 최저 사상 결국".split())
+
+
+def tokens(title):
+    clean = re.sub(r"\[[^\]]*\]|\([^)]*\)", " ", title)
+    out = []
+    for w in re.findall(r"[가-힣A-Za-z0-9]{2,}", clean):
+        w = w.lower()
+        if re.search(r"[가-힣]", w) and len(w) > 2:
+            w = PARTICLES.sub("", w)
+        if len(w) < 2 or w in STOP or w.isdigit() or w in out:
+            continue
+        out.append(w)
+    return set(out[:14])
+
+
+def similar(a, b):
+    n = len(a & b)
+    r = n / max(1, min(len(a), len(b)))
+    return (n >= 3 and r >= 0.4) or (n >= 2 and r >= 0.6)
+
+
+def parse_ago(text, now):
+    m = re.match(r"(\d+)\s*(분|시간|일)", text or "")
+    if not m:
+        return now
+    n, u = int(m.group(1)), m.group(2)
+    return now - n * {"분": 60, "시간": 3600, "일": 86400}[u]
+
+
+def fetch_ranking():
+    """네이버 언론사별 '많이 본 뉴스'(조회수 기준 1~5위)를 가져옵니다."""
+    try:
+        req = urllib.request.Request(RANK_URL, headers={"User-Agent": BROWSER_UA})
+        with urllib.request.urlopen(req, timeout=20) as r:
+            raw = r.read()
+    except Exception as e:  # noqa: BLE001
+        print(f"랭킹 실패: {e}", file=sys.stderr)
+        return []
+    s = raw.decode("cp949", errors="replace")
+    if "list_title" not in s:
+        s = raw.decode("utf-8", errors="replace")
+    now = time.time()
+    out = []
+    for block in s.split('class="rankingnews_name">')[1:]:
+        press = html.unescape(block.split("<", 1)[0]).strip()
+        for m in re.finditer(r'<em class="list_ranking_num">(\d+).*?<a href="([^"]+)" class="list_title[^"]*"[^>]*>(.*?)</a>\s*<span class="list_time[^"]*">([^<]*)<',
+                             block, re.S):
+            title = html.unescape(re.sub(r"<[^>]+>", "", m.group(3))).strip()
+            if title:
+                out.append({"rank": int(m.group(1)), "url": m.group(2).split("?")[0], "title": title,
+                            "source": press, "ts": int(parse_ago(m.group(4), now))})
+    return out
+
+
+KW = [  # 랭킹 기사 분류용 단어 (앞쪽 규칙 우선)
+    ("football", "프리미어리그 epl 라리가 분데스리가 리그앙 psg 토트넘 맨유 맨시티 리버풀 아스널 첼시 레알 바르셀로나 바르사 바이에른 뮌헨 손흥민 이강인 김민재 황희찬 챔피언스리그"),
+    ("startup", "스타트업 투자유치 시리즈a 시리즈b 벤처 유니콘 엑시트 액셀러레이터"),
+    ("realestate", "부동산 아파트 전세 월세 분양 청약 집값 재건축 재개발 주택 매매 공시가 토지거래허가"),
+    ("stock", "코스피 코스닥 증시 주가 주식 상장 공모주 증권 etf 개미 순매수 순매도 사이드카 시가총액 서학개미"),
+    ("world_econ", "뉴욕증시 나스닥 다우 연준 파월 국제유가 달러 엔화 위안"),
+    ("kr_econ", "경제 금리 환율 물가 수출 수입 실적 영업이익 매출 한은 한국은행 기재부 세금 연금 반도체 관세 고용 취업 일자리 소비 가계부채 대출 은행 카드 보험"),
+    ("ent", "배우 가수 아이돌 드라마 예능 연예 열애 결혼 이혼 컴백 방송인 유튜버 걸그룹 보이그룹 영화 콘서트 개그맨 아나운서"),
+    ("world", "美 中 日 北 트럼프 미국 중국 일본 러시아 우크라이나 이스라엘 유럽 영국 프랑스 독일 백악관 푸틴 시진핑"),
+]
+KW = [(c, w.split()) for c, w in KW]
+
+
+def classify(title):
+    t = title.lower()
+    for cat, words in KW:
+        if any(w in t for w in words):
+            return cat
+    return "society"
+
+
+def apply_ranking(merged, ranking):
+    """랭킹 기사와 비슷한 기사에 조회수 점수(views)를 주고, 랭킹에만 있는 기사는 새로 넣습니다."""
+    items = list(merged.values())
+    for it in items:
+        it["_t"] = tokens(it["title"])
+        it["views"] = 0
+    added = 0
+    for r in ranking:
+        rt = tokens(r["title"])
+        pts = 6 - min(5, r["rank"])  # 1위 5점 ~ 5위 1점
+        hit = [it for it in items if similar(rt, it["_t"])]
+        for it in hit:
+            it["views"] += pts
+        if not hit:
+            key = norm(r["title"])[:40]
+            if not key:
+                continue
+            if key in merged:
+                merged[key]["views"] += pts
+                continue
+            new = {"cat": classify(r["title"]), "tag": None, "title": r["title"], "source": r["source"],
+                   "url": r["url"], "ts": r["ts"], "related": 1, "rank": 0.5, "seen": 1,
+                   "views": pts, "_t": rt}
+            merged[key] = new
+            items.append(new)
+            added += 1
+    for it in merged.values():
+        it.pop("_t", None)
+    print(f"조회수 랭킹 {len(ranking)}건 반영, 랭킹에만 있던 기사 {added}건 추가, "
+          f"조회수 점수 받은 기사 {sum(1 for i in merged.values() if i['views'])}건")
+
+
 def main():
     with ThreadPoolExecutor(max_workers=8) as ex:
         bodies = list(ex.map(lambda f: fetch(f[2]), FEEDS))
@@ -276,6 +388,8 @@ def main():
             drop.append(k)
     for k in drop:
         merged.pop(k, None)
+
+    apply_ranking(merged, fetch_ranking())
 
     items = []
     for it in merged.values():
