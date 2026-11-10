@@ -6,12 +6,9 @@ jobs:
     steps:
       - run: |
           UA="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/130 Safari/537.36"
-          for u in "https://news.naver.com/main/ranking/popularDay.naver" "https://news.daum.net/ranking/popular" "https://news.naver.com/section/101" "https://m.news.naver.com/rankingList"; do
-            echo "=== $u"; curl -sSL -A "$UA" -m 20 "$u" -o p.html -w "%{http_code} %{size_download}\n"
-            grep -o 'list_title[^>]*>[^<]*<' p.html | head -5
-            grep -o '<a[^>]*href="https://v.daum.net/v/[^"]*"[^>]*>' p.html | head -3
-            grep -o 'class="[^"]*tit[^"]*"[^>]*>[^<]\{5,80\}' p.html | head -5
-            grep -o 'rankingnews_name[^<]*<' p.html | head -3
-          done
-          curl -sSL -A "$UA" "https://news.daum.net/ranking/popular" | sed 's/></>\n</g' | grep -n -i -E 'v.daum.net/v|tit' | head -20
-          curl -sSL -A "$UA" "https://news.naver.com/main/ranking/popularDay.naver" | sed 's/></>\n</g' | grep -n -E 'list_title|rankingnews_name|list_ranking_num' | head -12
+          curl -sSL -A "$UA" "https://news.naver.com/main/ranking/popularDay.naver" -o p.html
+          python3 - <<'PY'
+          s=open('p.html',encoding='utf-8').read()
+          i=s.find('rankingnews_name'); print(s[i-300:i+2600])
+          print('COUNT', s.count('list_title'))
+          PY
