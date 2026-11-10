@@ -8,7 +8,7 @@ jobs:
           UA="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/130 Safari/537.36"
           curl -sSL -A "$UA" "https://news.naver.com/main/ranking/popularDay.naver" -o p.html
           python3 - <<'PY'
-          s=open('p.html',encoding='utf-8').read()
+          s=open('p.html',encoding='cp949',errors='replace').read()
           i=s.find('rankingnews_name'); print(s[i-300:i+2600])
           print('COUNT', s.count('list_title'))
           PY
